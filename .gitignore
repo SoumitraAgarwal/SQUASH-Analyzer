@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Video files - all video formats
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.flv
+*.wmv
+*.mp4.part
+
+# Large output directories
+Pipeline_Output/
+outputs/
+downloads/
+processed/
+temp/
+sample_videos/
+
+# Log files and processing outputs
+*.log
+logs/
+*.json
+
+# Model files (YOLO weights, etc.)
+*.pt
+*.pth
+*.weights
+*.onnx
+
+# Include small template/example images only
+!*.jpg
+!*.jpeg
+!*.png
+
+# Exclude large datasets
+*.csv
+*.xlsx
+data/
+
+# Keep README files in subdirectories
+!**/README.md

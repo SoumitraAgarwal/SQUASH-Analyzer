@@ -1,0 +1,17 @@
+# Core video processing
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# Machine learning models
+ultralytics>=8.0.0
+mediapipe>=0.10.0
+
+# Video downloading
+yt-dlp>=2023.9.0
+
+# Progress tracking and utilities
+tqdm>=4.65.0
+
+# Optional: GPU acceleration (uncomment if you have CUDA)
+# torch>=2.0.0
+# torchvision>=0.15.0
