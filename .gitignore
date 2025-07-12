@@ -36,6 +36,8 @@ Thumbs.db
 *.flv
 *.wmv
 *.mp4.part
+*.webm.part
+*.f303.webm.part
 
 # Large output directories
 Pipeline_Output/
