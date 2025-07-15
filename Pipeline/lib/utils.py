@@ -26,10 +26,15 @@ class VideoDownloader:
             folder_path = os.path.join(self.downloads_dir, self._sanitize_filename(folder_name))
             os.makedirs(folder_path, exist_ok=True)
             
-            # yt-dlp options
+            # yt-dlp options - prioritize high quality
             ydl_opts = {
                 'outtmpl': os.path.join(folder_path, '%(title)s.%(ext)s'),
-                'format': 'best[ext=mp4]/best',  # Prefer mp4
+                'format': (
+                    # Try 1080p60 first, then 1080p, then 720p60, then 720p, then best available
+                    'best[height>=1080][fps>=60][ext=mp4]/best[height>=1080][ext=mp4]/'
+                    'best[height>=720][fps>=60][ext=mp4]/best[height>=720][ext=mp4]/'
+                    'best[ext=mp4]/best'
+                ),
                 'quiet': True,
                 'no_warnings': True,
             }
@@ -41,7 +46,24 @@ class VideoDownloader:
                 title = info.get('title', 'Unknown')
                 duration = info.get('duration', 0)
                 
-                print(f"📹 Downloading: {title}")
+                # Find the best format that will be selected
+                formats = info.get('formats', [])
+                selected_format = None
+                for fmt in formats:
+                    if fmt.get('format_id') == info.get('format_id'):
+                        selected_format = fmt
+                        break
+                
+                if selected_format:
+                    height = selected_format.get('height', 'Unknown')
+                    fps = selected_format.get('fps', 'Unknown')
+                    filesize = selected_format.get('filesize', 0)
+                    filesize_mb = filesize / (1024*1024) if filesize else 0
+                    
+                    print(f"📹 Downloading: {title}")
+                    print(f"🎬 Quality: {height}p @ {fps}fps ({filesize_mb:.1f}MB)")
+                else:
+                    print(f"📹 Downloading: {title}")
                 
                 # Download
                 ydl.download([video_url])
