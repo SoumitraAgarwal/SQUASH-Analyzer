@@ -30,10 +30,11 @@ class VideoDownloader:
             ydl_opts = {
                 'outtmpl': os.path.join(folder_path, '%(title)s.%(ext)s'),
                 'format': (
-                    # Try 1080p60 first, then 1080p, then 720p60, then 720p, then best available
-                    'best[height>=1080][fps>=60][ext=mp4]/best[height>=1080][ext=mp4]/'
-                    'best[height>=720][fps>=60][ext=mp4]/best[height>=720][ext=mp4]/'
-                    'best[ext=mp4]/best'
+                    # Try specific high quality formats first (no audio merging)
+                    '299/298/136/'  # 1080p60, 720p60, 720p
+                    'best[height>=1080][fps>=60]/best[height>=1080]/'  # Generic 1080p60, 1080p
+                    'best[height>=720][fps>=60]/best[height>=720]/'    # Generic 720p60, 720p
+                    'best'  # Final fallback
                 ),
                 'quiet': True,
                 'no_warnings': True,
