@@ -28,18 +28,18 @@ class VideoDownloader:
             folder_path = os.path.join(self.downloads_dir, self._sanitize_filename(folder_name))
             os.makedirs(folder_path, exist_ok=True)
             
-            # yt-dlp options - prioritize high quality, always merge audio
+            # yt-dlp options - prioritize high quality without requiring ffmpeg
             ydl_opts = {
                 'outtmpl': os.path.join(folder_path, '%(title)s.%(ext)s'),
-                'format': 'bestvideo+bestaudio/best',
-                'merge_output_format': 'mp4',
+                'format': (
+                    # Try specific high quality formats first (no audio merging)
+                    '299/298/136/'  # 1080p60, 720p60, 720p
+                    'best[height>=1080][fps>=60]/best[height>=1080]/'  # Generic 1080p60, 1080p
+                    'best[height>=720][fps>=60]/best[height>=720]/'    # Generic 720p60, 720p
+                    'best'  # Final fallback
+                ),
                 'quiet': True,
                 'no_warnings': True,
-                # Add post-processing to trim video to actual duration
-                'postprocessors': [{
-                    'key': 'FFmpegVideoConvertor',
-                    'preferedformat': 'mp4',
-                }],
                 'playliststart': 1,
                 'playlistend': 1,
             }
@@ -526,13 +526,23 @@ def extract_audio_from_video(video_path, audio_output_path=None):
     if audio_output_path is None:
         base, _ = os.path.splitext(video_path)
         audio_output_path = base + '.wav'
-    # Use ffmpeg to extract audio
-    cmd = [
-        'ffmpeg', '-y', '-i', video_path, '-vn', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '1', audio_output_path
-    ]
+    
+    # First try with ffmpeg if available
     try:
+        cmd = [
+            'ffmpeg', '-y', '-i', video_path, '-vn', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '1', audio_output_path
+        ]
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         return audio_output_path
-    except Exception as e:
-        print(f"❌ Audio extraction failed: {e}")
-        return None
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # If ffmpeg is not available, try using librosa directly on the video
+        try:
+            import librosa
+            # Load audio directly from video file using librosa
+            y, sr = librosa.load(video_path, sr=44100, mono=True)
+            # Save as wav using soundfile
+            sf.write(audio_output_path, y, sr)
+            return audio_output_path
+        except Exception as e:
+            print(f"❌ Audio extraction failed with both ffmpeg and librosa: {e}")
+            return None
