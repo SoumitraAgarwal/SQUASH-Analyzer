@@ -28,64 +28,61 @@ class VideoDownloader:
             folder_path = os.path.join(self.downloads_dir, self._sanitize_filename(folder_name))
             os.makedirs(folder_path, exist_ok=True)
             
-            # yt-dlp options - prioritize high quality without requiring ffmpeg
-            ydl_opts = {
-                'outtmpl': os.path.join(folder_path, '%(title)s.%(ext)s'),
-                'format': (
-                    # Try specific high quality formats first (no audio merging)
-                    '299/298/136/'  # 1080p60, 720p60, 720p
-                    'best[height>=1080][fps>=60]/best[height>=1080]/'  # Generic 1080p60, 1080p
-                    'best[height>=720][fps>=60]/best[height>=720]/'    # Generic 720p60, 720p
-                    'best'  # Final fallback
-                ),
-                'quiet': True,
-                'no_warnings': True,
-                'playliststart': 1,
-                'playlistend': 1,
-            }
-            
-            # Download the video
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Extract info first
+            # Get video info first
+            with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
                 info = ydl.extract_info(video_url, download=False)
                 title = info.get('title', 'Unknown') if info else 'Unknown'
                 duration = info.get('duration', 0) if info else 0
                 
-                # Find the best format that will be selected
-                formats = info.get('formats', []) if info else []
-                selected_format = None
-                for fmt in formats:
-                    if info and fmt.get('format_id') == info.get('format_id'):
-                        selected_format = fmt
-                        break
+                print(f"📹 Downloading: {title}")
                 
-                if selected_format:
-                    height = selected_format.get('height', 'Unknown')
-                    fps = selected_format.get('fps', 'Unknown')
-                    filesize = selected_format.get('filesize', 0)
-                    filesize_mb = filesize / (1024*1024) if filesize else 0
-                    
-                    print(f"📹 Downloading: {title}")
-                    print(f"🎬 Quality: {height}p @ {fps}fps ({filesize_mb:.1f}MB)")
-                else:
-                    print(f"📹 Downloading: {title}")
+                # Step 1: Download high quality video (video-only)
+                video_ydl_opts = {
+                    'outtmpl': os.path.join(folder_path, '%(title)s_video.%(ext)s'),
+                    'format': (
+                        # Try specific high quality formats first (video-only)
+                        '299/298/136/'  # 1080p60, 720p60, 720p
+                        'best[height>=1080][fps>=60]/best[height>=1080]/'  # Generic 1080p60, 1080p
+                        'best[height>=720][fps>=60]/best[height>=720]/'    # Generic 720p60, 720p
+                        'bestvideo'  # Best video quality
+                    ),
+                    'quiet': True,
+                    'no_warnings': True,
+                    'playliststart': 1,
+                    'playlistend': 1,
+                }
                 
-                # Download
-                ydl.download([video_url])
+                # Step 2: Download audio separately
+                audio_ydl_opts = {
+                    'outtmpl': os.path.join(folder_path, '%(title)s_audio.%(ext)s'),
+                    'format': (
+                        # Try to get best audio quality
+                        '140/251/250/249/'  # AAC and Opus audio formats
+                        'bestaudio'  # Best audio quality
+                    ),
+                    'quiet': True,
+                    'no_warnings': True,
+                    'playliststart': 1,
+                    'playlistend': 1,
+                }
                 
-                # Find the downloaded file
-                safe_title = self._sanitize_filename(title)
-                downloaded_file = None
-                for file in os.listdir(folder_path):
-                    if file.startswith(safe_title) or title.split()[0] in file:
-                        file_path = os.path.join(folder_path, file)
-                        if os.path.exists(file_path):
-                            downloaded_file = file_path
-                            break
+                # Download video
+                print("🎬 Downloading high-quality video...")
+                with yt_dlp.YoutubeDL(video_ydl_opts) as video_ydl:
+                    video_ydl.download([video_url])
                 
-                if downloaded_file:
+                # Download audio  
+                print("🔊 Downloading audio...")
+                with yt_dlp.YoutubeDL(audio_ydl_opts) as audio_ydl:
+                    audio_ydl.download([video_url])
+                
+                # Step 3: Combine video and audio using Python (without ffmpeg)
+                print("🔗 Combining video and audio...")
+                final_path = self._combine_video_audio(folder_path, title)
+                
+                if final_path and os.path.exists(final_path):
                     # Trim video to actual duration to remove trailing frames
-                    trimmed_file = self._trim_video_to_duration(downloaded_file, duration)
+                    trimmed_file = self._trim_video_to_duration(final_path, duration)
                     
                     return {
                         'title': title,
@@ -93,21 +90,81 @@ class VideoDownloader:
                         'duration': duration
                     }
                 
-                # If exact match not found, return first video file
-                for file in os.listdir(folder_path):
-                    if file.endswith(('.mp4', '.mkv', '.avi', '.webm')):
-                        return {
-                            'title': title,
-                            'file_path': os.path.join(folder_path, file),
-                            'duration': duration
-                        }
-                
-                print("❌ Downloaded file not found")
+                print("❌ Failed to combine video and audio")
                 return None
                 
         except Exception as e:
             print(f"❌ Download error: {e}")
             return None
+    
+    def _combine_video_audio(self, folder_path, title):
+        """Combine video and audio files using Python libraries"""
+        import glob
+        
+        # Find video and audio files
+        video_files = glob.glob(os.path.join(folder_path, f"*_video.*"))
+        audio_files = glob.glob(os.path.join(folder_path, f"*_audio.*"))
+        
+        if not video_files or not audio_files:
+            print("❌ Could not find both video and audio files")
+            return None
+        
+        video_path = video_files[0]
+        audio_path = audio_files[0]
+        
+        # Create final output path
+        safe_title = self._sanitize_filename(title)
+        final_path = os.path.join(folder_path, f"{safe_title}.mp4")
+        
+        try:
+            # Try using moviepy if available
+            try:
+                from moviepy.editor import VideoFileClip, AudioFileClip
+                
+                print("🎬 Using moviepy to combine video and audio...")
+                video_clip = VideoFileClip(video_path)
+                audio_clip = AudioFileClip(audio_path)
+                
+                # Set audio to video
+                final_clip = video_clip.set_audio(audio_clip)
+                
+                # Write final video
+                final_clip.write_videofile(final_path, codec='libx264', audio_codec='aac')
+                
+                # Clean up
+                video_clip.close()
+                audio_clip.close()
+                final_clip.close()
+                
+                print(f"✅ Combined video saved: {os.path.basename(final_path)}")
+                
+                # Clean up separate files
+                os.remove(video_path)
+                os.remove(audio_path)
+                
+                return final_path
+                
+            except ImportError:
+                # Fallback: Just use the video file and extract audio separately for analysis
+                print("⚠️ moviepy not available, using video-only file")
+                print("🔊 Audio will be extracted separately for analysis")
+                
+                # Just copy the video file to the final location
+                import shutil
+                shutil.move(video_path, final_path)
+                
+                # Keep the audio file for later processing
+                audio_final_path = os.path.join(folder_path, f"{safe_title}_audio.{audio_path.split('.')[-1]}")
+                shutil.move(audio_path, audio_final_path)
+                
+                return final_path
+                
+        except Exception as e:
+            print(f"❌ Error combining video and audio: {e}")
+            # Fallback to video-only
+            import shutil
+            shutil.move(video_path, final_path)
+            return final_path
     
     def _sanitize_filename(self, filename):
         """Sanitize filename for filesystem compatibility"""
@@ -521,11 +578,43 @@ class DataExporter:
 def extract_audio_from_video(video_path, audio_output_path=None):
     """Extract audio from video and save as .wav file. Returns path to .wav file."""
     import os
-    import tempfile
+    import glob
     import subprocess
     if audio_output_path is None:
         base, _ = os.path.splitext(video_path)
         audio_output_path = base + '.wav'
+    
+    # First check if we have a separate audio file from the download process
+    video_dir = os.path.dirname(video_path)
+    video_name = os.path.splitext(os.path.basename(video_path))[0]
+    
+    # Look for separate audio files (from our download process)
+    audio_patterns = [
+        os.path.join(video_dir, f"{video_name}_audio.*"),
+        os.path.join(video_dir, f"*_audio.*")
+    ]
+    
+    separate_audio_file = None
+    for pattern in audio_patterns:
+        audio_files = glob.glob(pattern)
+        if audio_files:
+            separate_audio_file = audio_files[0]
+            break
+    
+    if separate_audio_file:
+        print(f"🔊 Using separate audio file: {os.path.basename(separate_audio_file)}")
+        try:
+            import librosa
+            # Load audio directly from the separate audio file
+            y, sr = librosa.load(separate_audio_file, sr=44100, mono=True)
+            # Save as wav using soundfile
+            sf.write(audio_output_path, y, sr)
+            return audio_output_path
+        except Exception as e:
+            print(f"❌ Failed to process separate audio file: {e}")
+    
+    # Fallback: try to extract from video file
+    print(f"🔊 Extracting audio from video file...")
     
     # First try with ffmpeg if available
     try:
