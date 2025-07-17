@@ -38,6 +38,14 @@ class VideoDownloader:
                 ),
                 'quiet': True,
                 'no_warnings': True,
+                # Add post-processing to trim video to actual duration
+                'postprocessors': [{
+                    'key': 'FFmpegVideoConvertor',
+                    'preferedformat': 'mp4',
+                }],
+                # Try to skip intro/outro content for livestreams
+                'playliststart': 1,
+                'playlistend': 1,
             }
             
             # Download the video
@@ -71,15 +79,23 @@ class VideoDownloader:
                 
                 # Find the downloaded file
                 safe_title = self._sanitize_filename(title)
+                downloaded_file = None
                 for file in os.listdir(folder_path):
                     if file.startswith(safe_title) or title.split()[0] in file:
                         file_path = os.path.join(folder_path, file)
                         if os.path.exists(file_path):
-                            return {
-                                'title': title,
-                                'file_path': file_path,
-                                'duration': duration
-                            }
+                            downloaded_file = file_path
+                            break
+                
+                if downloaded_file:
+                    # Trim video to actual duration to remove trailing frames
+                    trimmed_file = self._trim_video_to_duration(downloaded_file, duration)
+                    
+                    return {
+                        'title': title,
+                        'file_path': trimmed_file,
+                        'duration': duration
+                    }
                 
                 # If exact match not found, return first video file
                 for file in os.listdir(folder_path):
@@ -107,6 +123,161 @@ class VideoDownloader:
         filename = re.sub(r'\s+', ' ', filename)
         # Trim and limit length
         return filename.strip()[:100]
+    
+    def _trim_video_to_duration(self, video_path, target_duration):
+        """Trim video to remove trailing frames and match actual duration"""
+        try:
+            if not target_duration or target_duration <= 0:
+                return video_path
+                
+            # Check actual video duration
+            cap = cv2.VideoCapture(video_path)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            actual_duration = frame_count / fps if fps > 0 else 0
+            cap.release()
+            
+            print(f"📊 Video duration: YouTube={target_duration:.1f}s, Actual={actual_duration:.1f}s")
+            
+            # For squash videos, if the video is much longer than expected, 
+            # try to find the actual match content
+            duration_diff = actual_duration - target_duration
+            
+            # If the video is substantially longer, try to trim it intelligently
+            if duration_diff > 300:  # More than 5 minutes difference
+                print(f"⚠️ Large duration difference ({duration_diff:.1f}s), attempting smart trimming...")
+                
+                # For squash match videos, try to detect actual match content
+                # by looking for consistent court activity
+                smart_duration = self._detect_match_duration(video_path, fps)
+                
+                if smart_duration and smart_duration < actual_duration:
+                    print(f"🎯 Detected actual match duration: {smart_duration:.1f}s")
+                    target_duration = smart_duration
+                else:
+                    # Fallback: assume match is roughly 90 minutes max for squash
+                    max_squash_duration = 90 * 60  # 90 minutes
+                    if actual_duration > max_squash_duration:
+                        print(f"⚠️ Video too long ({actual_duration/60:.1f}min), trimming to {max_squash_duration/60:.1f}min")
+                        target_duration = max_squash_duration
+                    else:
+                        print(f"✅ Video duration reasonable, keeping original")
+                        return video_path
+            
+            # Trim if necessary
+            if actual_duration > target_duration + 30:  # Add 30s buffer
+                print(f"✂️ Trimming video to {target_duration:.1f}s...")
+                
+                # Create trimmed filename
+                base_name = os.path.splitext(video_path)[0]
+                trimmed_path = f"{base_name}_trimmed.mp4"
+                
+                # Use OpenCV to trim video
+                cap = cv2.VideoCapture(video_path)
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                
+                # Create output video writer
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                out = cv2.VideoWriter(trimmed_path, fourcc, fps, (width, height))
+                
+                if not out.isOpened():
+                    print("⚠️ Could not create trimmed video, using original")
+                    return video_path
+                
+                # Copy frames up to target duration
+                target_frames = int(target_duration * fps)
+                frames_written = 0
+                
+                while frames_written < target_frames:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    
+                    out.write(frame)
+                    frames_written += 1
+                
+                cap.release()
+                out.release()
+                
+                # Verify trimmed video
+                if os.path.exists(trimmed_path):
+                    # Remove original and rename trimmed
+                    os.remove(video_path)
+                    os.rename(trimmed_path, video_path)
+                    print(f"✅ Video trimmed to {target_duration:.1f}s")
+                else:
+                    print("⚠️ Trimming failed, using original video")
+            
+            return video_path
+            
+        except Exception as e:
+            print(f"⚠️ Video trimming error: {e}, using original video")
+            return video_path
+    
+    def _detect_match_duration(self, video_path, fps):
+        """Detect actual match duration by analyzing court activity"""
+        try:
+            cap = cv2.VideoCapture(video_path)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+            # Sample every 30 seconds to detect court activity
+            sample_interval = int(30 * fps)
+            court_activity_frames = []
+            
+            print(f"🔍 Analyzing video for court activity...")
+            
+            for frame_idx in range(0, total_frames, sample_interval):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                ret, frame = cap.read()
+                
+                if not ret:
+                    break
+                
+                # Check if this frame shows court activity
+                if self._is_court_activity_frame(frame):
+                    court_activity_frames.append(frame_idx)
+            
+            cap.release()
+            
+            if len(court_activity_frames) < 2:
+                return None
+            
+            # Find the start and end of consistent court activity
+            # Look for the longest continuous period of court activity
+            start_frame = court_activity_frames[0]
+            end_frame = court_activity_frames[-1]
+            
+            # Convert to duration
+            match_duration = end_frame / fps
+            
+            print(f"🎯 Court activity detected from {start_frame/fps:.1f}s to {end_frame/fps:.1f}s")
+            return match_duration
+            
+        except Exception as e:
+            print(f"⚠️ Match duration detection failed: {e}")
+            return None
+    
+    def _is_court_activity_frame(self, frame):
+        """Check if frame shows court activity (simplified court detection)"""
+        try:
+            # Convert to HSV for better analysis
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            
+            # Look for court-like colors (light surfaces)
+            lower_court = np.array([0, 0, 150])
+            upper_court = np.array([180, 50, 255])
+            court_mask = cv2.inRange(hsv, lower_court, upper_court)
+            court_percentage = np.sum(court_mask > 0) / (frame.shape[0] * frame.shape[1])
+            
+            # Court frames should have significant light-colored areas
+            if court_percentage > 0.25:  # At least 25% light colors
+                return True
+            
+            return False
+            
+        except Exception as e:
+            return False
 
 class FileManager:
     """Handles file management and utilities"""
