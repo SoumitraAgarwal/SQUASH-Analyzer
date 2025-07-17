@@ -18,6 +18,7 @@ sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lib'))
 from utils import VideoDownloader, FileManager, DataExporter
 from camera_processor import CameraProcessor
 from player_detection import PlayerDetector, CourtVisualizer
+from audio_events import detect_hits_and_walls, annotate_video_with_events
 
 class SquashPipeline:
     """Clean, modular squash video analysis pipeline"""
@@ -223,6 +224,7 @@ class SquashPipeline:
             frame_idx = 0
             inference_stride = 10  # Process every 10th frame for efficiency (increased from 5)
             cached_player_data = []
+            cached_candidates = []
             csv_data = []
             
             # Setup progress bar - process all frames, but stop at max_duration if specified
@@ -244,11 +246,13 @@ class SquashPipeline:
                 # Process frame for player detection
                 if frame_idx % inference_stride == 0:
                     # Run full detection
-                    annotated_frame, player_data = self.player_detector.process_frame(frame, frame_idx=frame_idx)
+                    annotated_frame, player_data, all_candidates = self.player_detector.process_frame(frame, frame_idx=frame_idx)
                     cached_player_data = player_data
+                    cached_candidates = all_candidates
                 else:
                     # On skipped frames, do NOT draw any player annotations
                     annotated_frame = frame.copy()
+                    cached_candidates = []
                 
                 # Court mapping is already done in player_detector.process_frame
                 
@@ -300,6 +304,17 @@ class SquashPipeline:
                     print(f"   ✅ CSV regenerated: {len(csv_data)} frames processed (video already exists)")
             else:
                 print(f"   ✅ Analysis complete: {len(csv_data)} frames processed")
+            
+            # After player analysis, run audio event detection
+            print(f"\n🔊 Step 4: Detecting ball hits and wall events in audio...")
+            events = detect_hits_and_walls(output_path)
+            n_hits = sum(1 for t, e in events if e == 'hit')
+            n_walls = sum(1 for t, e in events if e == 'wall')
+            print(f"   🎯 Detected {n_hits} hits and {n_walls} wall events in audio.")
+            # Annotate video with detected events
+            print(f"   📝 Annotating video with audio events...")
+            annotated_video_path = annotate_video_with_events(output_path, events)
+            print(f"   ✅ Audio event-annotated video: {annotated_video_path}")
             
             return output_path
             

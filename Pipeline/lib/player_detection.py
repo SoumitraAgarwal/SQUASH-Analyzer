@@ -102,7 +102,7 @@ class PlayerDetector:
                         'centroid': candidate['centroid'],
                         'jersey_color': jersey_color
                     })
-            # 4. Sort by confidence and keep only the best two
+            # 4. Sort by confidence and keep only the best two as players
             player_candidates.sort(key=lambda x: x['confidence'], reverse=True)
             player_data = player_candidates[:2]
             # 5. Update tracking positions
@@ -112,13 +112,14 @@ class PlayerDetector:
             if self.color_tracking_enabled and player_data and frame_idx % 30 == 0:
                 player_data = self._assign_consistent_player_ids(player_data)
             # 7. Draw annotations on the original frame (not cropped)
-            annotated_frame = self._draw_annotations(original_frame, player_data)
+            # Pass all detections and mark which are players
+            annotated_frame = self._draw_annotations(original_frame, player_data, detection_candidates)
             if frame_idx % 100 == 0:
                 print(f"Debug: Found {len(player_data)} non-front-wall players on frame {frame_idx}")
-            return annotated_frame, player_data
+            return annotated_frame, player_data, detection_candidates
         except Exception as e:
             print(f"❌ Frame processing error: {e}")
-            return frame, []
+            return frame, [], []
     
     def _sort_by_tracking_priority(self, detection_candidates):
         """Sort detection candidates by proximity to previous player positions"""
@@ -440,31 +441,42 @@ class PlayerDetector:
         except Exception as e:
             return player_data
     
-    def _draw_annotations(self, frame, player_data):
-        """Draw player annotations on frame"""
+    def _draw_annotations(self, frame, player_data, all_candidates=None):
+        """Draw player and all person annotations on frame"""
         try:
             annotated_frame = frame.copy()
-            # Debug: Always draw a test rectangle in top-left corner
-            cv2.rectangle(annotated_frame, (10, 10), (100, 50), (0, 255, 255), 1)
-            cv2.putText(annotated_frame, f"Players: {len(player_data)}", (15, 35), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+            # Draw all detected people (grey boxes)
+            if all_candidates is not None:
+                for candidate in all_candidates:
+                    bbox = candidate['bbox']
+                    confidence = candidate['confidence']
+                    box_w = bbox[2] - bbox[0]
+                    box_h = bbox[3] - bbox[1]
+                    size_str = f"{box_w}x{box_h}"
+                    # Draw thin grey box
+                    cv2.rectangle(annotated_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (128,128,128), 1, lineType=cv2.LINE_AA)
+                    # Draw label with confidence and size
+                    label = f"Person ({confidence:.2f}) {size_str}"
+                    label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0]
+                    cv2.rectangle(annotated_frame, (bbox[0], bbox[1] - label_size[1] - 4), (bbox[0] + label_size[0], bbox[1]), (128,128,128), -1)
+                    cv2.putText(annotated_frame, label, (bbox[0], bbox[1] - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
+            # Draw player boxes (blue/green)
             for i, player in enumerate(player_data):
                 bbox = player['bbox']
                 confidence = player['confidence']
+                box_w = bbox[2] - bbox[0]
+                box_h = bbox[3] - bbox[1]
+                size_str = f"{box_w}x{box_h}"
                 pose = player['pose']
-                # Draw bounding box with the thinnest possible line (thickness=1, anti-aliased)
                 color = (0, 255, 0) if i == 0 else (255, 0, 0)
                 if len(bbox) != 4 or bbox[0] < 0 or bbox[1] < 0:
                     print(f"Debug: Skipping invalid bbox: {bbox}")
                     continue
                 cv2.rectangle(annotated_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 1, lineType=cv2.LINE_AA)
-                # Draw label with smaller font and thinner background
-                label = f"{player['label']} ({confidence:.2f})"
+                label = f"{player['label']} ({confidence:.2f}) {size_str}"
                 label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
-                cv2.rectangle(annotated_frame, (bbox[0], bbox[1] - label_size[1] - 6), 
-                            (bbox[0] + label_size[0], bbox[1]), color, -1)
-                cv2.putText(annotated_frame, label, (bbox[0], bbox[1] - 2),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                cv2.rectangle(annotated_frame, (bbox[0], bbox[1] - label_size[1] - 6), (bbox[0] + label_size[0], bbox[1]), color, -1)
+                cv2.putText(annotated_frame, label, (bbox[0], bbox[1] - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
                 # Draw pose stick figure
                 if pose and pose.pose_landmarks:
                     annotated_frame = self._draw_stick_figure(annotated_frame, pose.pose_landmarks, bbox)

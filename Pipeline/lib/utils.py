@@ -10,6 +10,8 @@ import numpy as np
 import yt_dlp
 import pandas as pd
 from datetime import datetime
+import soundfile as sf
+import librosa
 
 class VideoDownloader:
     """Simple video downloader for single videos"""
@@ -26,16 +28,11 @@ class VideoDownloader:
             folder_path = os.path.join(self.downloads_dir, self._sanitize_filename(folder_name))
             os.makedirs(folder_path, exist_ok=True)
             
-            # yt-dlp options - prioritize high quality
+            # yt-dlp options - prioritize high quality, always merge audio
             ydl_opts = {
                 'outtmpl': os.path.join(folder_path, '%(title)s.%(ext)s'),
-                'format': (
-                    # Try specific high quality formats first (no audio merging)
-                    '299/298/136/'  # 1080p60, 720p60, 720p
-                    'best[height>=1080][fps>=60]/best[height>=1080]/'  # Generic 1080p60, 1080p
-                    'best[height>=720][fps>=60]/best[height>=720]/'    # Generic 720p60, 720p
-                    'best'  # Final fallback
-                ),
+                'format': 'bestvideo+bestaudio/best',
+                'merge_output_format': 'mp4',
                 'quiet': True,
                 'no_warnings': True,
                 # Add post-processing to trim video to actual duration
@@ -43,7 +40,6 @@ class VideoDownloader:
                     'key': 'FFmpegVideoConvertor',
                     'preferedformat': 'mp4',
                 }],
-                # Try to skip intro/outro content for livestreams
                 'playliststart': 1,
                 'playlistend': 1,
             }
@@ -52,14 +48,14 @@ class VideoDownloader:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 # Extract info first
                 info = ydl.extract_info(video_url, download=False)
-                title = info.get('title', 'Unknown')
-                duration = info.get('duration', 0)
+                title = info.get('title', 'Unknown') if info else 'Unknown'
+                duration = info.get('duration', 0) if info else 0
                 
                 # Find the best format that will be selected
-                formats = info.get('formats', [])
+                formats = info.get('formats', []) if info else []
                 selected_format = None
                 for fmt in formats:
-                    if fmt.get('format_id') == info.get('format_id'):
+                    if info and fmt.get('format_id') == info.get('format_id'):
                         selected_format = fmt
                         break
                 
@@ -363,7 +359,7 @@ class FileManager:
         """Check available disk space"""
         try:
             statvfs = os.statvfs(path)
-            available_gb = (statvfs.f_frsize * statvfs.f_availa) / (1024**3)
+            available_gb = (statvfs.f_frsize * statvfs.f_free) / (1024**3)
             return available_gb >= required_gb
         except:
             return True  # Assume space is available if check fails
@@ -521,3 +517,22 @@ class DataExporter:
         frame_data['rally_active'] = is_rally_active
         frame_data['rally_intensity'] = None  # Can be added later
         return frame_data
+
+def extract_audio_from_video(video_path, audio_output_path=None):
+    """Extract audio from video and save as .wav file. Returns path to .wav file."""
+    import os
+    import tempfile
+    import subprocess
+    if audio_output_path is None:
+        base, _ = os.path.splitext(video_path)
+        audio_output_path = base + '.wav'
+    # Use ffmpeg to extract audio
+    cmd = [
+        'ffmpeg', '-y', '-i', video_path, '-vn', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '1', audio_output_path
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return audio_output_path
+    except Exception as e:
+        print(f"❌ Audio extraction failed: {e}")
+        return None
