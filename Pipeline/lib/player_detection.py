@@ -103,8 +103,11 @@ class PlayerDetector:
                         'jersey_color': jersey_color
                     })
             # 4. Sort by confidence and keep only the best two as players
-            player_candidates.sort(key=lambda x: x['confidence'], reverse=True)
-            player_data = player_candidates[:2]
+            # Select top 2 players by confidence, but only if bbox area >= 15000
+            min_area = 15000
+            filtered_candidates = [c for c in player_candidates if (c['bbox'][2] - c['bbox'][0]) * (c['bbox'][3] - c['bbox'][1]) >= min_area]
+            filtered_candidates = sorted(filtered_candidates, key=lambda x: x['confidence'], reverse=True)
+            player_data = filtered_candidates[:2]
             # 5. Update tracking positions
             if player_data:
                 self.previous_player_positions = [p['centroid'] for p in player_data]
